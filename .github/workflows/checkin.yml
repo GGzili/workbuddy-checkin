@@ -1,0 +1,76 @@
+name: 每日签到
+
+on:
+  schedule:
+    # UTC 01:17，即北京时间每天 09:17
+    - cron: "17 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workbuddy-checkin
+  cancel-in-progress: false
+
+jobs:
+  checkin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: 下载项目源码
+        uses: actions/checkout@v4
+        with:
+          repository: linguo2625469/workbuddy2api-panel
+          persist-credentials: false
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: 编译签到工具
+        run: go build -o signin_bin ./cmd/signin
+
+      - name: 恢复账号凭证
+        env:
+          AUTH_JSON: ${{ secrets.WORKBUDDY_AUTH }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          raw = os.environ["AUTH_JSON"]
+          json.loads(raw)
+          directory = Path("auths")
+          directory.mkdir(exist_ok=True)
+          directory.chmod(0o700)
+          path = directory / "workbuddy-account.json"
+          path.write_text(raw, encoding="utf-8")
+          path.chmod(0o600)
+          PY
+
+      - name: 执行签到
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./signin_bin auths | tee "$RUNNER_TEMP/checkin.log"
+          if ! grep -Eq 'fail=0$' "$RUNNER_TEMP/checkin.log"; then
+            echo "::error::签到报告存在失败，请查看日志"
+            exit 1
+          fi
+
+      - name: 保存刷新后的凭证
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ secrets.SECRETS_WRITE_TOKEN }}
+          TARGET_REPO: ${{ github.repository }}
+        run: |
+          if [ -f auths/workbuddy-account.json ]; then
+            gh secret set WORKBUDDY_AUTH \
+              --repo "$TARGET_REPO" \
+              < auths/workbuddy-account.json
+          fi
