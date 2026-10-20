@@ -1,0 +1,21 @@
+name: 定时调度诊断
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: 记录触发方式和时间
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          echo "触发方式：$EVENT_NAME"
+          date -u
