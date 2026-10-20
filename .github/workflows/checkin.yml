@@ -2,8 +2,8 @@ name: 每日签到
 
 on:
   schedule:
-    # UTC 01:17，即北京时间每天 09:17
-    - cron: "17 1 * * *"
+    # 临时测试：每小时的第 7、17、27、37、47、57 分钟运行
+    - cron: "7,17,27,37,47,57 * * * *"
   workflow_dispatch:
 
 permissions:
