@@ -2,7 +2,7 @@ name: 每日签到
 
 on:
   schedule:
-    # 临时测试：每小时的第 7、17、27、37、47、57 分钟运行
+    # 每小时的第 7、17、27、37、47、57 分钟运行
     - cron: "7,17,27,37,47,57 * * * *"
   workflow_dispatch:
 
@@ -35,6 +35,7 @@ jobs:
         run: go build -o signin_bin ./cmd/signin
 
       - name: 恢复账号凭证
+        id: restore
         env:
           AUTH_JSON: ${{ secrets.WORKBUDDY_AUTH }}
         run: |
@@ -43,34 +44,71 @@ jobs:
           import os
           from pathlib import Path
 
-          raw = os.environ["AUTH_JSON"]
-          json.loads(raw)
-          directory = Path("auths")
-          directory.mkdir(exist_ok=True)
+          accounts = json.loads(os.environ["AUTH_JSON"])
+          if isinstance(accounts, dict):
+              accounts = [accounts]
+
+          if not isinstance(accounts, list) or not accounts:
+              raise ValueError("WORKBUDDY_AUTH 必须是账号对象或非空账号数组")
+          if not all(isinstance(account, dict) and account for account in accounts):
+              raise ValueError("每个账号必须是非空 JSON 对象")
+
+          directory = Path(os.environ["RUNNER_TEMP"]) / "workbuddy-auths"
+          directory.mkdir(mode=0o700, exist_ok=True)
           directory.chmod(0o700)
-          path = directory / "workbuddy-account.json"
-          path.write_text(raw, encoding="utf-8")
-          path.chmod(0o600)
+
+          for index, account in enumerate(accounts, 1):
+              path = directory / f"workbuddy-account-{index:04d}.json"
+              path.write_text(
+                  json.dumps(account, ensure_ascii=False),
+                  encoding="utf-8",
+              )
+              path.chmod(0o600)
+
+          print(f"已恢复 {len(accounts)} 个账号")
           PY
 
       - name: 执行签到
         shell: bash
         run: |
           set -euo pipefail
-          ./signin_bin auths | tee "$RUNNER_TEMP/checkin.log"
+          ./signin_bin "$RUNNER_TEMP/workbuddy-auths" \
+            | tee "$RUNNER_TEMP/checkin.log"
           if ! grep -Eq 'fail=0$' "$RUNNER_TEMP/checkin.log"; then
             echo "::error::签到报告存在失败，请查看日志"
             exit 1
           fi
 
       - name: 保存刷新后的凭证
-        if: ${{ always() }}
+        if: ${{ always() && steps.restore.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ secrets.SECRETS_WRITE_TOKEN }}
           TARGET_REPO: ${{ github.repository }}
         run: |
-          if [ -f auths/workbuddy-account.json ]; then
-            gh secret set WORKBUDDY_AUTH \
-              --repo "$TARGET_REPO" \
-              < auths/workbuddy-account.json
-          fi
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          directory = Path(os.environ["RUNNER_TEMP"]) / "workbuddy-auths"
+          files = sorted(directory.glob("workbuddy-*.json"))
+          if not files:
+              raise ValueError("没有可保存的账号凭证")
+
+          accounts = [
+              json.loads(path.read_text(encoding="utf-8"))
+              for path in files
+          ]
+          output = Path(os.environ["RUNNER_TEMP"]) / "updated-auth.json"
+          output.touch(mode=0o600, exist_ok=True)
+          output.chmod(0o600)
+          output.write_text(
+              json.dumps(accounts, ensure_ascii=False),
+              encoding="utf-8",
+          )
+          PY
+
+          gh secret set WORKBUDDY_AUTH \
+            --repo "$TARGET_REPO" \
+            < "$RUNNER_TEMP/updated-auth.json"
