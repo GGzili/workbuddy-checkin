@@ -3,7 +3,7 @@ name: 每日签到
 on:
   schedule:
     # 每小时的第 7、17、27、37、47、57 分钟运行
-    - cron: "7,17,27,37,47,57 * * * *"
+    - cron: "17 1 * * *"
   workflow_dispatch:
 
 permissions:
